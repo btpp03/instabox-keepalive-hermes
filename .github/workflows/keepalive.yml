@@ -1,0 +1,25 @@
+name: instabox keepalive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: run keepalive
+        env:
+          INSTABOX_KEY: ${{ secrets.INSTABOX_KEY }}
+          MACHINE_PREFIX: ibox-
+        run: python3 keepalive.py
