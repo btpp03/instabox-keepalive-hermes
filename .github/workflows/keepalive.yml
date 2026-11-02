@@ -19,7 +19,18 @@ jobs:
         with:
           python-version: "3.12"
       - name: run keepalive
+        id: ka
+        continue-on-error: true
         env:
           INSTABOX_KEY: ${{ secrets.INSTABOX_KEY }}
           MACHINE_PREFIX: ibox-
         run: python3 keepalive.py
+      - name: result (never fail the job -> no failure email)
+        env:
+          OUTCOME: ${{ steps.ka.outcome }}
+        run: |
+          echo "keepalive outcome: $OUTCOME"
+          case "$OUTCOME" in
+            success) echo "::notice title=keepalive::all good";;
+            *) echo "::warning title=keepalive::部分机器没起来（冷却/挂起），见上一步日志";;
+          esac
