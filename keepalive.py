@@ -10,7 +10,7 @@ import json, os, sys, time, uuid, urllib.request, urllib.error
 
 KEY = os.environ["INSTABOX_KEY"].strip()
 BASE = "https://api.instabox.sh"
-PREFIX = os.environ.get("MACHINE_PREFIX", "ibox-")
+PREFIX = os.environ.get("MACHINE_PREFIX", "ibox-03")
 TMO = int(os.environ.get("TIMEOUT_SECONDS", "14400"))
 BOOT = "/data/bin/boot.sh"
 LOG = []
@@ -79,15 +79,14 @@ def main():
         if state == "running":
             st, out, err, raw = exec_(
                 mid,
-                "ls /data/bin/boot.sh >/dev/null 2>&1 && (bash /data/bin/boot.sh >/tmp/boot.log 2>&1; echo boot_rc=$?); "
-                "pgrep -x xray >/dev/null && echo xray=up || echo xray=DOWN; "
-                "pgrep -x nezha-agent >/dev/null && echo nezha=up || echo nezha=DOWN",
+                "bash /data/home/hermes/start_hermes.sh >/tmp/boot.log 2>&1; echo hermes_rc=$?; "
+                "pgrep -f hermes >/dev/null && echo hermes=up || echo hermes=DOWN",
                 90)
             tail = " ".join((out or "").split())[-160:]
             log(f"{name}: {state} | {tail}")
             if st != 200:
                 problems.append(f"{name}: exec {st}")
-            elif name == "ibox-01" and ("xray=DOWN" in (out or "") or "nezha=DOWN" in (out or "")):
+            elif name == "ibox-03" and "hermes=DOWN" in (out or ""):
                 problems.append(f"{name}: 进程没起来 -> {tail}")
         else:
             problems.append(f"{name}: 仍是 {state}")
