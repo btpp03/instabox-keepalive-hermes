@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""instabox keepalive: 续 timeout + 唤醒 + 进程自愈。
+"""instabox keepalive: 唤醒 + 按机器进程自愈。
 
 规则（2026-10-19 实测）：
   - 免费档 autoSuspendAfterSeconds 被平台钉死在 1800（传 0 会被改回），空闲 30 分钟必挂起
-  - timeoutSeconds 最大 14400（4h），PATCH 可续
   - 挂起态 POST /wake 返回 409，必须 POST /start
+  - 挂起时进程被冻结保留（processesPreserved），唤醒后 TCP 是死连接，
+    所以刚 start 回来的那轮要强制重启 01 的 nezha-agent，不能只做幂等 pgrep
+2026-11-08：覆盖 ibox-01(哪吒) + ibox-03(hermes)。01 只拉 nezha-agent，不跑 xray。
 """
 import json, os, sys, time, uuid, urllib.request, urllib.error
 
 KEY = os.environ["INSTABOX_KEY"].strip()
 BASE = "https://api.instabox.sh"
-PREFIX = os.environ.get("MACHINE_PREFIX", "ibox-03")
-TMO = int(os.environ.get("TIMEOUT_SECONDS", "14400"))
-BOOT = "/data/bin/boot.sh"
+# 只保活这两台；02/04/05 不挂服务，不拉起
+WANTED = set(x.strip() for x in os.environ.get("MACHINES", "ibox-01,ibox-03").split(",") if x.strip())
 LOG = []
 
 
@@ -51,13 +52,14 @@ def main():
     if st != 200:
         log("FATAL: 列机器失败", st, json.dumps(r)[:300])
         sys.exit(1)
-    machines = [m for m in r.get("machines", []) if m["name"].startswith(PREFIX)]
+    machines = [m for m in r.get("machines", []) if m["name"] in WANTED]
     if not machines:
-        log("没有匹配前缀的机器:", PREFIX)
+        log("没有匹配名字的机器:", ",".join(sorted(WANTED)))
         return
     problems = []
     for m in machines:
         mid, name, state = m["id"], m["name"], m["state"]
+        just_started = False
         # 1) 续命：2026-10-21 起 API 已移除 timeoutSeconds 字段（PATCH 只接受
         #    name/rootDiskGiB/persistentDiskGiB/metadata/autoSuspendAfterSeconds/vault），
         #    机器 timeoutAt 恒为 None，所以不再续期；autoSuspendAfterSeconds 仍被平台钉死 1800。
@@ -66,6 +68,8 @@ def main():
         if state != "running":
             st, sr = api(f"/v1/machines/{mid}/start", "POST")
             log(f"{name}: {state} -> start {st}")
+            if st in (200, 202):
+                just_started = True  # 唤醒后连接僵死，下面要强制重连
             if st not in (200, 202):
                 problems.append(f"{name}: start {st} {json.dumps(sr)[:120]}")
                 continue
@@ -75,18 +79,24 @@ def main():
                 if m2.get("state") == "running":
                     break
             state = m2.get("state", state)
-        # 3) 进程自愈（只有 running 才有意义）
+        # 3) 进程自愈（只有 running 才有意义），按机器分派
         if state == "running":
-            st, out, err, raw = exec_(
-                mid,
-                "bash /data/home/hermes/start_hermes.sh >/tmp/boot.log 2>&1; echo hermes_rc=$?; "
-                "pgrep -f hermes >/dev/null && echo hermes=up || echo hermes=DOWN",
-                90)
+            if name == "ibox-01":
+                # boot.sh 只拉 nezha-agent（已不含 xray）；刚唤醒则强制重连
+                pre = "pkill -x nezha-agent 2>/dev/null; sleep 2; " if just_started else ""
+                cmd = (pre + "bash /data/bin/boot.sh >/tmp/boot.log 2>&1; echo boot_rc=$?; "
+                       "sleep 3; pgrep -x nezha-agent >/dev/null && echo nezha=up || echo nezha=DOWN")
+                down = "nezha=DOWN"
+            else:  # ibox-03: hermes gateway
+                cmd = ("bash /data/home/hermes/start_hermes.sh >/tmp/boot.log 2>&1; echo hermes_rc=$?; "
+                       "pgrep -f hermes >/dev/null && echo hermes=up || echo hermes=DOWN")
+                down = "hermes=DOWN"
+            st, out, err, raw = exec_(mid, cmd, 90)
             tail = " ".join((out or "").split())[-160:]
             log(f"{name}: {state} | {tail}")
             if st != 200:
                 problems.append(f"{name}: exec {st}")
-            elif name == "ibox-03" and "hermes=DOWN" in (out or ""):
+            elif down in (out or ""):
                 problems.append(f"{name}: 进程没起来 -> {tail}")
         else:
             problems.append(f"{name}: 仍是 {state}")
