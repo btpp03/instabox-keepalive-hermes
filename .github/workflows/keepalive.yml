@@ -23,7 +23,7 @@ jobs:
         continue-on-error: true
         env:
           INSTABOX_KEY: ${{ secrets.INSTABOX_KEY }}
-          MACHINE_PREFIX: ibox-03
+          MACHINES: ibox-01,ibox-03
         run: python3 keepalive.py
       - name: result (never fail the job -> no failure email)
         env:
